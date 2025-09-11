@@ -40,7 +40,6 @@ export function formatSlackMessage(body) {
         ev.metadata?.filename ||
         "";
 
-    // Metadata & helpful context
     const environment = ev.environment || getTag(ev.tags, "environment") || "unknown";
     const errorType = ev?.metadata?.type;
 
@@ -76,7 +75,6 @@ export function formatSlackMessage(body) {
     if (os) fields.push({ type: "mrkdwn", text: `*OS:*\n${os}` });
     if (userBits) fields.push({ type: "mrkdwn", text: `*User:*\n${userBits}` });
 
-    // Compact metadata line
     const contextItems = [
         projectId ? `Project: ${projectId}` : null,
         issueId ? `Issue: ${issueId}` : null,
@@ -89,9 +87,9 @@ export function formatSlackMessage(body) {
     if (reqUrl) linkTexts.push(`<${reqUrl}|Request URL>`);
 
     const headerLines = [
-        `${emoji} Sentry ${level.toUpperCase()}${action ? `  •  ${action}` : ""}`,
-        `Title: ${title}`,
-        ...(culprit ? [`Culprit: ${culprit}`] : []),
+        `*${emoji} Sentry ${level.toUpperCase()}*${action ? `  •  _${action}_` : ""}`,
+        `*Title:* ${title}`,
+        ...(culprit ? [`*Culprit:* \`${culprit}\``] : []),
     ].join("\n");
 
     const blocks = [

@@ -1,21 +1,17 @@
 // api/_sentrySlack.js
 // -----------------------------------------------------------------------------
 // Purpose:
-//   Utilities used by your Vercel API routes to:
-//     1) Parse Sentry webhook payloads
-//     2) Build a readable Slack Block Kit message
-//     3) Post the message using your Slack App Bot token (chat.postMessage)
+//   Format compact, readable Slack alerts from Sentry webhooks and send them
+//   using your Slack App Bot token.
 //
-// Requirements (Slack):
-//   - Env var: SLACK_APP_AUTH_TOKEN = xoxb-... (Bot User OAuth Token)
-//   - Your app must have scope: chat:write  (and chat:write.public if posting
-//     to public channels the bot isn’t a member of)
-//   - Invite the bot to the target channels
-//
+// Env required (Vercel → Project → Settings → Environment Variables):
+//   - SLACK_APP_AUTH_TOKEN = xoxb-... (Bot User OAuth Token)
+// Scopes required (Slack):
+//   - chat:write  (+ chat:write.public if posting to public channels your bot isn't in)
 // -----------------------------------------------------------------------------
 
 export const config = {
-    api: {bodyParser: {sizeLimit: "2mb"}},
+    api: { bodyParser: { sizeLimit: "2mb" } },
 };
 
 const LEVEL_EMOJI = {
@@ -26,6 +22,7 @@ const LEVEL_EMOJI = {
     debug: "🐞",
 };
 
+// ---------- tiny helpers (keep things pretty) ----------
 function getTag(tags = [], key) {
     try {
         const t = tags.find(pair => Array.isArray(pair) && pair[0] === key);
@@ -35,115 +32,148 @@ function getTag(tags = [], key) {
     }
 }
 
-function toSlackDate(ev) {
-    let epochSeconds = null;
-
-    if (ev?.datetime) {
-        const ms = Date.parse(ev.datetime);
-        if (!Number.isNaN(ms)) epochSeconds = Math.floor(ms / 1000);
-    } else if (typeof ev?.timestamp === "number") {
-        epochSeconds = Math.floor(ev.timestamp);
-    }
-
-    if (epochSeconds == null) return null;
-
-    return `<!date^${epochSeconds}^{date_short_pretty} {time}|${new Date(
-        epochSeconds * 1000
-    ).toISOString()}>`;
+function ellipsize(str, max = 120) {
+    if (!str || typeof str !== "string") return str;
+    return str.length > max ? `${str.slice(0, max - 1)}…` : str;
 }
 
-/**
- * Build a Slack Block Kit payload from a Sentry webhook body.
- */
-export function formatSlackMessage(body) {
-    const action = body?.action;
-    const ev = body?.data?.event ?? {};
+function shortenPath(p, keep = 2) {
+    if (!p || typeof p !== "string") return p;
+    const parts = p.split("/").filter(Boolean);
+    if (parts.length <= keep) return p;
+    return `…/${parts.slice(-keep).join("/")}`;
+}
 
+function toSlackDate(ev) {
+    let epoch = null;
+    if (ev?.datetime) {
+        const ms = Date.parse(ev.datetime);
+        if (!Number.isNaN(ms)) epoch = Math.floor(ms / 1000);
+    } else if (typeof ev?.timestamp === "number") {
+        epoch = Math.floor(ev.timestamp);
+    }
+    if (epoch == null) return null;
+    return `<!date^${epoch}^{date_short_pretty} {time}|${new Date(epoch * 1000).toISOString()}>`;
+}
+
+function isFrontend(ev) {
+    // Heuristic: if Sentry reports browser context/tags, treat as frontend
+    return Boolean(
+        ev?.contexts?.browser?.name ||
+        getTag(ev?.tags, "browser") ||
+        getTag(ev?.tags, "client_os")
+    );
+}
+
+// ---------- main formatter ----------
+export function formatSlackMessage(body) {
+    const action = body?.action;               // e.g., "triggered"
+    const ev = body?.data?.event ?? {};
     const level = (ev.level || getTag(ev.tags, "level") || "error").toLowerCase();
     const emoji = LEVEL_EMOJI[level] || "🚨";
+    const environment = ev.environment || getTag(ev.tags, "environment") || "unknown";
 
-    // Env comes either from event.environment or tags
-    const environment =
-        ev.environment || getTag(ev.tags, "environment") || "unknown";
-
-    // Better title: [env] LEVEL: message
-    const shortTitle =
+    // Build a concise, readable header title
+    const errorType = ev.metadata?.type || "";
+    const rawMessage =
         ev.metadata?.value ||
         ev.title ||
         ev.message ||
         ev?.logentry?.formatted ||
         "Sentry Event";
 
+    const shortMessage = ellipsize(rawMessage, 100);
+    const headerTitle = `[${environment}] ${level.toUpperCase()} • ${shortMessage}`;
+
+    // Keep culprit short (last 2 path parts)
     const culprit =
         ev.culprit ||
         ev.location ||
         ev.metadata?.filename ||
         "";
+    const niceCulprit = culprit ? shortenPath(culprit, 2) : "";
 
-    const projectId = ev.project;
-    const issueId = ev.issue_id;
+    const slackWhen = toSlackDate(ev);
 
+    // Useful links
     const eventWebUrl = ev.web_url;
     const issueApiUrl = ev.issue_url;
     const reqUrl = ev.request?.url || getTag(ev.tags, "url");
 
-    const browser =
-        ev?.contexts?.browser?.name && ev?.contexts?.browser?.version
-            ? `${ev.contexts.browser.name} ${ev.contexts.browser.version}`
-            : getTag(ev.tags, "browser");
-
-    const os =
-        ev?.contexts?.client_os?.name && ev?.contexts?.client_os?.version
-            ? `${ev.contexts.client_os.name} ${ev.contexts.client_os.version}`
-            : getTag(ev.tags, "client_os");
-
-    const userBits = [
-        ev.user?.email,
-        ev.user?.id || getTag(ev.tags, "user"),
-    ].filter(Boolean).join(" • ");
-
-    const slackWhen = toSlackDate(ev);
-
+    // Select a few high-signal fields (max ~4)
     const fields = [];
-    if (projectId) fields.push({type: "mrkdwn", text: `*Project ID:*\n${projectId}`});
-    if (issueId) fields.push({type: "mrkdwn", text: `*Issue ID:*\n${issueId}`});
-    if (environment) fields.push({type: "mrkdwn", text: `*Env:*\n${environment}`});
-    if (slackWhen) fields.push({type: "mrkdwn", text: `*When:*\n${slackWhen}`});
-    if (browser) fields.push({type: "mrkdwn", text: `*Browser:*\n${browser}`});
-    if (os) fields.push({type: "mrkdwn", text: `*OS:*\n${os}`});
-    if (userBits) fields.push({type: "mrkdwn", text: `*User:*\n${userBits}`});
+    if (slackWhen) fields.push({ type: "mrkdwn", text: `*When:*\n${slackWhen}` });
+    fields.push({ type: "mrkdwn", text: `*Env:*\n${environment}` });
 
-    const links = [];
-    if (eventWebUrl) links.push(`<${eventWebUrl}|Open in Sentry>`);
-    if (issueApiUrl) links.push(`<${issueApiUrl}|Issue API>`);
-    if (reqUrl) links.push(`<${reqUrl}|Request URL>`);
+    if (isFrontend(ev)) {
+        const browser =
+            ev?.contexts?.browser?.name && ev?.contexts?.browser?.version
+                ? `${ev.contexts.browser.name} ${ev.contexts.browser.version}`
+                : getTag(ev.tags, "browser");
+        const os =
+            ev?.contexts?.client_os?.name && ev?.contexts?.client_os?.version
+                ? `${ev.contexts.client_os.name} ${ev.contexts.client_os.version}`
+                : getTag(ev.tags, "client_os");
+        if (browser) fields.push({ type: "mrkdwn", text: `*Browser:*\n${browser}` });
+        if (os) fields.push({ type: "mrkdwn", text: `*OS:*\n${os}` });
+    } else {
+        // Backend: prefer request URL if present
+        if (reqUrl) fields.push({ type: "mrkdwn", text: `*Request:*\n<${reqUrl}|Open>` });
+    }
+
+    const userBits = [ev.user?.email, ev.user?.id || getTag(ev.tags, "user")]
+        .filter(Boolean).join(" • ");
+    if (userBits) fields.push({ type: "mrkdwn", text: `*User:*\n${userBits}` });
+
+    // Cap fields to avoid clutter
+    const MAX_FIELDS = 4;
+    const compactFields = fields.slice(0, MAX_FIELDS);
+
+    // Light context with IDs (subtle, non-distracting)
+    const projectId = ev.project;
+    const issueId = ev.issue_id;
+    const contextItems = [
+        projectId ? `Project: ${projectId}` : null,
+        issueId ? `Issue: ${issueId}` : null,
+        errorType ? `Type: ${errorType}` : null,
+    ].filter(Boolean);
+
+    // Build blocks
+    const blocks = [
+        {
+            type: "section",
+            text: {
+                type: "mrkdwn",
+                text:
+                    `*${emoji} ${headerTitle}*` +
+                    (action ? `  •  _${action}_` : "") +
+                    (niceCulprit ? `\n*Culprit:* \`${niceCulprit}\`` : ""),
+            },
+        },
+        ...(compactFields.length ? [{ type: "section", fields: compactFields }] : []),
+        ...(contextItems.length
+            ? [{ type: "context", elements: [{ type: "mrkdwn", text: contextItems.join("  •  ") }] }]
+            : []),
+        ...(eventWebUrl || reqUrl || issueApiUrl
+            ? [{
+                type: "actions",
+                elements: [
+                    ...(eventWebUrl ? [{ type: "button", text: { type: "plain_text", text: "Open in Sentry" }, url: eventWebUrl }] : []),
+                    ...(reqUrl ? [{ type: "button", text: { type: "plain_text", text: "Request" }, url: reqUrl }] : []),
+                    ...(issueApiUrl ? [{ type: "button", text: { type: "plain_text", text: "Issue API" }, url: issueApiUrl }] : []),
+                ],
+            }]
+            : []),
+        { type: "divider" },
+    ];
 
     return {
-        text: `${emoji} [${environment}] ${level.toUpperCase()}: ${shortTitle}`,
-        blocks: [
-            {
-                type: "section",
-                text: {
-                    type: "mrkdwn",
-                    text:
-                        `*${emoji} [${environment}] Sentry ${level.toUpperCase()}*` +
-                        (action ? `  •  _${action}_` : "") +
-                        `\n*Title:* ${shortTitle}` +
-                        (culprit ? `\n*Culprit:* \`${culprit}\`` : ""),
-                },
-            },
-            ...(fields.length ? [{type: "section", fields}] : []),
-            ...(links.length
-                ? [{type: "context", elements: [{type: "mrkdwn", text: links.join("  •  ")}]}]
-                : []),
-            {type: "divider"},
-        ],
+        text: `${emoji} ${headerTitle}`, // fallback (notifications/previews)
+        blocks,
     };
 }
 
-/**
- * Send a message to Slack via chat.postMessage using your Slack App Bot token.
- */
+// ---------- sender ----------
 export async function postToSlack(channel, payload) {
     const token = process.env.SLACK_APP_AUTH_TOKEN;
     if (!token) throw new Error("Missing SLACK_APP_AUTH_TOKEN");
@@ -155,7 +185,7 @@ export async function postToSlack(channel, payload) {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json; charset=utf-8",
         },
-        body: JSON.stringify({channel, ...payload}),
+        body: JSON.stringify({ channel, ...payload }),
     });
 
     if (resp.status === 429) {
@@ -171,13 +201,11 @@ export async function postToSlack(channel, payload) {
     return data;
 }
 
-/**
- * Restrict route to POST; respond 405 otherwise.
- */
+// ---------- method guard ----------
 export function methodGuard(req, res) {
     if (req.method !== "POST") {
         res.setHeader("Allow", "POST");
-        res.status(405).json({error: "Method not allowed"});
+        res.status(405).json({ error: "Method not allowed" });
         return false;
     }
     return true;

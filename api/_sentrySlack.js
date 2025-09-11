@@ -1,15 +1,15 @@
 // api/_sentrySlack.js
 
 export const config = {
-    api: {bodyParser: {sizeLimit: "2mb"}},
+    api: { bodyParser: { sizeLimit: "2mb" } },
 };
 
-const LEVEL_EMOJI = {
-    fatal: "🔥",
-    error: "🚨",
-    warning: "⚠️",
-    info: "ℹ️",
-    debug: "🐞",
+const LEVEL_ALIAS = {
+    fatal: ":fire:",
+    error: ":rotating_light:",
+    warning: ":warning:",
+    info: ":information_source:",
+    debug: ":beetle:",
 };
 
 function getTag(tags = [], key) {
@@ -26,26 +26,23 @@ export function formatSlackMessage(body) {
     const ev = body?.data?.event ?? {};
 
     const level = (ev.level || getTag(ev.tags, "level") || "error").toLowerCase();
-    const emoji = LEVEL_EMOJI[level] || "🚨";
+    const emoji = LEVEL_ALIAS[level] || ":rotating_light:";
 
-    // Pretty title parts
-    const environment = ev.environment || getTag(ev.tags, "environment") || "unknown";
-    const errorType = ev?.metadata?.type;
-    const shortTitle =
-        ev?.metadata?.value ||
+    const title =
         ev.title ||
         ev.message ||
         ev?.logentry?.formatted ||
         "Sentry Event";
-
-    // Final, prettier title: [env] LEVEL • short message
-    const prettyTitle = `${level.toUpperCase()} • ${shortTitle}`;
 
     const culprit =
         ev.culprit ||
         ev.location ||
         ev.metadata?.filename ||
         "";
+
+    // Metadata & helpful context
+    const environment = ev.environment || getTag(ev.tags, "environment") || "unknown";
+    const errorType = ev?.metadata?.type;
 
     const projectId = ev.project;
     const issueId = ev.issue_id;
@@ -73,47 +70,48 @@ export function formatSlackMessage(body) {
         (ev.timestamp ? new Date(ev.timestamp * 1000).toISOString() : undefined);
 
     const fields = [];
-    // Surface environment explicitly
-    fields.push({type: "mrkdwn", text: `*Env:*\n${environment}`});
-    if (timestampISO) fields.push({type: "mrkdwn", text: `*When:*\n${timestampISO}`});
-    if (browser) fields.push({type: "mrkdwn", text: `*Browser:*\n${browser}`});
-    if (os) fields.push({type: "mrkdwn", text: `*OS:*\n${os}`});
-    if (userBits) fields.push({type: "mrkdwn", text: `*User:*\n${userBits}`});
+    fields.push({ type: "mrkdwn", text: `*Env:*\n${environment}` });
+    if (timestampISO) fields.push({ type: "mrkdwn", text: `*When:*\n${timestampISO}` });
+    if (browser) fields.push({ type: "mrkdwn", text: `*Browser:*\n${browser}` });
+    if (os) fields.push({ type: "mrkdwn", text: `*OS:*\n${os}` });
+    if (userBits) fields.push({ type: "mrkdwn", text: `*User:*\n${userBits}` });
 
-    const links = [];
-    if (eventWebUrl) links.push(`<${eventWebUrl}|Open in Sentry>`);
-    if (issueApiUrl) links.push(`<${issueApiUrl}|Issue API>`);
-    if (reqUrl) links.push(`<${reqUrl}|Request URL>`);
-
-    // Context line (compact metadata)
+    // Compact metadata line
     const contextItems = [
         projectId ? `Project: ${projectId}` : null,
         issueId ? `Issue: ${issueId}` : null,
         errorType ? `Type: ${errorType}` : null,
     ].filter(Boolean);
 
+    const linkTexts = [];
+    if (eventWebUrl) linkTexts.push(`<${eventWebUrl}|Open in Sentry>`);
+    if (issueApiUrl) linkTexts.push(`<${issueApiUrl}|Issue API>`);
+    if (reqUrl) linkTexts.push(`<${reqUrl}|Request URL>`);
+
+    const headerLines = [
+        `${emoji} Sentry ${level.toUpperCase()}${action ? `  •  ${action}` : ""}`,
+        `Title: ${title}`,
+        ...(culprit ? [`Culprit: ${culprit}`] : []),
+    ].join("\n");
+
+    const blocks = [
+        {
+            type: "section",
+            text: { type: "mrkdwn", text: headerLines },
+        },
+        ...(fields.length ? [{ type: "section", fields }] : []),
+        ...(contextItems.length
+            ? [{ type: "context", elements: [{ type: "mrkdwn", text: contextItems.join("  •  ") }] }]
+            : []),
+        { type: "divider" },
+        ...(linkTexts.length
+            ? [{ type: "context", elements: [{ type: "mrkdwn", text: linkTexts.join("  •  ") }] }]
+            : []),
+    ];
+
     return {
-        text: `${emoji} ${prettyTitle}`,
-        blocks: [
-            {
-                type: "section",
-                text: {
-                    type: "mrkdwn",
-                    text:
-                        `*${emoji} ${prettyTitle}*` +
-                        (action ? `  •  _${action}_` : "") +
-                        (culprit ? `\n*Culprit:* \`${culprit}\`` : ""),
-                },
-            },
-            ...(fields.length ? [{type: "section", fields}] : []),
-            ...(links.length
-                ? [{type: "context", elements: [{type: "mrkdwn", text: links.join("  •  ")}]}]
-                : []),
-            ...(contextItems.length
-                ? [{type: "context", elements: [{type: "mrkdwn", text: contextItems.join("  •  ")}]}]
-                : []),
-            {type: "divider"},
-        ],
+        text: `${emoji} Sentry ${level.toUpperCase()}: ${title}`,
+        blocks,
     };
 }
 
@@ -127,7 +125,7 @@ export async function postToSlack(channel, payload) {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json; charset=utf-8",
         },
-        body: JSON.stringify({channel, ...payload}),
+        body: JSON.stringify({ channel, ...payload }),
     });
 
     if (resp.status === 429) {
@@ -146,7 +144,7 @@ export async function postToSlack(channel, payload) {
 export function methodGuard(req, res) {
     if (req.method !== "POST") {
         res.setHeader("Allow", "POST");
-        res.status(405).json({error: "Method not allowed"});
+        res.status(405).json({ error: "Method not allowed" });
         return false;
     }
     return true;

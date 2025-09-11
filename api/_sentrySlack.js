@@ -102,8 +102,8 @@ export function formatSlackMessage(body) {
 }
 
 export async function postToSlack(channel, payload) {
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) throw new Error("Missing SLACK_BOT_TOKEN");
+  const token = process.env.SLACK_APP_AUTH_TOKEN;
+  if (!token) throw new Error("Missing SLACK_APP_AUTH_TOKEN");
 
   const resp = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",

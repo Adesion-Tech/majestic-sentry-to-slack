@@ -6,10 +6,10 @@ export const config = sharedConfig;
 export default async function handler(req, res) {
     if (!methodGuard(req, res)) return;
 
-    try {
-        const channel = process.env.SLACK_CHANNEL_BACKEND;
-        if (!channel) return res.status(500).json({error: "Missing SLACK_CHANNEL_BACKEND"});
+    const channel = process.env.SLACK_CHANNEL_BACKEND;
+    if (!channel) return res.status(500).json({error: "Missing SLACK_CHANNEL_BACKEND"});
 
+    try {
         const payload = formatSlackMessage(req.body || {});
         await postToSlack(channel, payload);
 

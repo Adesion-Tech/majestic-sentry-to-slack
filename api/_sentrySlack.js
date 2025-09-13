@@ -1,3 +1,9 @@
+// api/_sentrySlack.js
+
+export const config = {
+    api: {bodyParser: {sizeLimit: "2mb"}},
+};
+
 function fmtISO(x) {
     if (!x) return undefined;
     try {
@@ -193,4 +199,39 @@ export function formatSlackMessage(body) {
         text: `${baseEmoji} Sentry ${level.toUpperCase()}: ${title}`,
         blocks,
     };
+}
+
+export async function postToSlack(channel, payload) {
+    const token = process.env.SLACK_APP_AUTH_TOKEN;
+    if (!token) throw new Error("Missing SLACK_APP_AUTH_TOKEN");
+
+    const resp = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({channel, ...payload}),
+    });
+
+    if (resp.status === 429) {
+        const retryAfter = parseInt(resp.headers.get("retry-after") || "1", 10);
+        await new Promise((r) => setTimeout(r, (isNaN(retryAfter) ? 1 : retryAfter) * 1000));
+        return postToSlack(channel, payload);
+    }
+
+    const data = await resp.json().catch(() => ({}));
+    if (!data.ok) {
+        throw new Error(`Slack API error: ${data.error || resp.statusText}`);
+    }
+    return data;
+}
+
+export function methodGuard(req, res) {
+    if (req.method !== "POST") {
+        res.setHeader("Allow", "POST");
+        res.status(405).json({error: "Method not allowed"});
+        return false;
+    }
+    return true;
 }

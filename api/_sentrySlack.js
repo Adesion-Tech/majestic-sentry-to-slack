@@ -196,7 +196,7 @@ export function formatSlackMessage(body) {
     ];
 
     return {
-        text: `${baseEmoji} Sentry ${level.toUpperCase()}: ${title}`,
+        text: `${baseEmoji} ${level.toUpperCase()}: ${title}`,
         blocks,
     };
 }

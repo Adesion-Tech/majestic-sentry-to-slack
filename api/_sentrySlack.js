@@ -201,7 +201,7 @@ export function formatSlackMessage(body) {
     };
 }
 
-export async function postToSlack(channel, payload) {
+export async function postToSlack(channel, payload, attempt = 0) {
     const token = process.env.SLACK_APP_AUTH_TOKEN;
     if (!token) throw new Error("Missing SLACK_APP_AUTH_TOKEN");
 
@@ -216,14 +216,22 @@ export async function postToSlack(channel, payload) {
 
     if (resp.status === 429) {
         const retryAfter = parseInt(resp.headers.get("retry-after") || "1", 10);
-        await new Promise((r) => setTimeout(r, (isNaN(retryAfter) ? 1 : retryAfter) * 1000));
-        return postToSlack(channel, payload);
+        const wait = (isNaN(retryAfter) ? 1 : retryAfter) * 1000;
+
+        const jitter = Math.random() * 500;
+        if (attempt < 3) {
+            await new Promise((r) => setTimeout(r, wait + jitter));
+            return postToSlack(channel, payload, attempt + 1);
+        } else {
+            throw new Error("Slack rate limit hit repeatedly");
+        }
     }
 
     const data = await resp.json().catch(() => ({}));
     if (!data.ok) {
         throw new Error(`Slack API error: ${data.error || resp.statusText}`);
     }
+
     return data;
 }
 

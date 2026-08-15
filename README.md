@@ -24,6 +24,9 @@ Both reuse the shared helper in `api/_sentrySlack.js`.
    - `SLACK_BOT_TOKEN` = `xoxb-...`
    - `SLACK_CHANNEL_BACKEND` = `C0123ABCDE`
    - `SLACK_CHANNEL_FRONTEND` = `C0456FGHIJ`
+   - `SLACK_CHANNEL_FEEDBACK` = `C0789KLMNO` *(optional)* — when set, Sentry **User Feedback** notifications
+     are routed to this channel instead; when unset, everything goes to the backend/frontend channels
+     as before.
 
 4) **Deploy and point Sentry Webhooks**
    - Backend Sentry project → Webhook URL: `https://<your-app>.vercel.app/api/sentry-backend`

@@ -29,6 +29,35 @@ const STATUS_EMOJI = {
     ignored: ":zzz:",
 };
 
+// Feedback arrives either as an "issue" webhook (issue at body.data.issue,
+// issueCategory "feedback") or as an alert-fired event carrying
+// contexts.feedback — see https://docs.sentry.io/organization/integrations/integration-platform/webhooks/issues/
+export function isFeedback(req) {
+    const body = req?.body || {};
+    const ev = body?.data?.event ?? {};
+    const issue =
+        body?.data?.issue ??
+        ((!body?.data?.event && body?.id && body?.title) ? body : null);
+
+    const category = String(issue?.issueCategory || issue?.category || "").toLowerCase();
+
+    return Boolean(
+        category === "feedback" ||
+        ev?.contexts?.feedback ||
+        ev?.type === "feedback" ||
+        issue?.title === "User Feedback" ||
+        (issue?.metadata?.contact_email && issue?.metadata?.message)
+    );
+}
+
+// Routes feedback to SLACK_CHANNEL_FEEDBACK when set; otherwise keeps the
+// default channel, preserving pre-feedback behavior for deployments that
+// don't define the variable.
+export function resolveChannel(req, defaultChannel) {
+    const feedbackChannel = process.env.SLACK_CHANNEL_FEEDBACK;
+    return feedbackChannel && isFeedback(req) ? feedbackChannel : defaultChannel;
+}
+
 export function formatSlackMessage(body) {
     // --- Normalization for both Sentry event webhooks and Issue API responses ---
     const ev = body?.data?.event ?? {};     // event-style

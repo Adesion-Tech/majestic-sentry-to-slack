@@ -1,13 +1,13 @@
 // api/sentry-backend.js
-import {config as sharedConfig, formatSlackMessage, methodGuard, postToSlack} from "./_sentrySlack.js";
+import {config as sharedConfig, formatSlackMessage, methodGuard, postToSlack, resolveChannel} from "./_sentrySlack.js";
 
 export const config = sharedConfig;
 
 export default async function handler(req, res) {
     if (!methodGuard(req, res)) return;
 
-    const channel = process.env.SLACK_CHANNEL_BACKEND;
-    if (!channel) return res.status(500).json({error: "Missing SLACK_CHANNEL_BACKEND"});
+    if (!process.env.SLACK_CHANNEL_BACKEND) return res.status(500).json({error: "Missing SLACK_CHANNEL_BACKEND"});
+    const channel = resolveChannel(req, process.env.SLACK_CHANNEL_BACKEND);
 
     try {
         const payload = formatSlackMessage(req.body || {});
